@@ -1,0 +1,115 @@
+name: Release image
+
+# Called when a roxiegrillo repository pushes a release tag (or when a release
+# is rebuilt by hand): the gate decides on the CI runner in seconds, then the
+# image is built once on the build runner, with no second test run. The caller
+# grants contents:read, checks:read, packages:write and id-token:write.
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Image repository, e.g. ghcr.io/roxiegrillo/rate-router.
+        type: string
+        required: true
+      tag:
+        description: The release tag; the triggering tag when empty.
+        type: string
+        default: ""
+      image-tag:
+        description: Tag of the image; the release version without its v when empty.
+        type: string
+        default: ""
+      platforms:
+        description: Target platforms.
+        type: string
+        default: linux/amd64
+      context:
+        description: Build context.
+        type: string
+        default: "."
+      file:
+        description: Dockerfile.
+        type: string
+        default: Dockerfile
+      build-args:
+        description: Build arguments, one KEY=value per line.
+        type: string
+        default: ""
+      module-repositories:
+        description: Private module repositories the build reads, one per line.
+        type: string
+        default: ""
+      module-token-secret:
+        description: BuildKit secret id that receives the module token, e.g. github_token.
+        type: string
+        default: ""
+      module-netrc-secret:
+        description: BuildKit secret id that receives a netrc file with the module token, e.g. netrc.
+        type: string
+        default: ""
+      require-green-parent:
+        description: false skips the parent's checks, for rebuilding an old release whose checks never ran.
+        type: boolean
+        default: true
+      runner:
+        description: Runner label for the gate.
+        type: string
+        default: lab-ci
+      build-runner:
+        description: Runner label for the build, which needs Docker.
+        type: string
+        default: lab-build
+    outputs:
+      tag:
+        description: The release tag.
+        value: ${{ jobs.gate.outputs.tag }}
+      sha:
+        description: The commit the release tag points to.
+        value: ${{ jobs.gate.outputs.sha }}
+      digest:
+        description: Digest of the released image.
+        value: ${{ jobs.image.outputs.digest }}
+
+jobs:
+  gate:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tag: ${{ steps.gate.outputs.tag }}
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      - id: gate
+        uses: roxiegrillo/workflows/release-gate@v1
+        with:
+          tag: ${{ inputs.tag || github.ref_name }}
+          require-green-parent: ${{ inputs.require-green-parent }}
+
+  image:
+    needs: gate
+    runs-on: ${{ inputs.build-runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - id: image
+        uses: roxiegrillo/workflows/image@v1
+        with:
+          image: ${{ inputs.image }}
+          tag: ${{ needs.gate.outputs.tag }}
+          image-tag: ${{ inputs.image-tag }}
+          platforms: ${{ inputs.platforms }}
+          context: ${{ inputs.context }}
+          file: ${{ inputs.file }}
+          build-args: ${{ inputs.build-args }}
+          client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
+          private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
+          module-repositories: ${{ inputs.module-repositories }}
+          module-token-secret: ${{ inputs.module-token-secret }}
+          module-netrc-secret: ${{ inputs.module-netrc-secret }}

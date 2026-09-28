@@ -1,0 +1,40 @@
+name: CI
+
+# The shape every caller copies: pull requests and main only, so each commit is
+# checked once, and never Release Please's pull request or release commit,
+# which touch only these files.
+on:
+  pull_request:
+    paths-ignore: [CHANGELOG.md, .release-please-manifest.json, version.txt]
+  push:
+    branches: [main]
+    paths-ignore: [CHANGELOG.md, .release-please-manifest.json, version.txt]
+
+# A newer push to a pull request supersedes the run for the older commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # This repository is public: it runs on GitHub's runners, never on a
+    # lab runner, which only private repositories may reach.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint the workflows
+        run: |
+          set -euo pipefail
+          script="https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash"
+          bash <(curl -fsSL "$script") 1.7.7 "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" -color
+
+      - name: Check the actions
+        run: ruby scripts/check-actions.rb

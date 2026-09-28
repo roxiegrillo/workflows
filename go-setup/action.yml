@@ -1,0 +1,80 @@
+name: Go setup
+description: >-
+  Prepares a job for Go on a lab runner: the standard tool list, Go itself and,
+  given the automation App, read access to the owner's private modules through
+  a token that never leaves the job.
+
+inputs:
+  apt:
+    description: "'false' skips the standard tool list that self-hosted Linux runners install."
+    default: "true"
+  go-version-file:
+    description: File that names the Go version.
+    default: go.mod
+  go-version:
+    description: Go version; overrides go-version-file when set.
+    default: ""
+  cache:
+    description: "'false' disables setup-go's module and build cache."
+    default: "true"
+  client-id:
+    description: Client ID of the automation App; no private module access when empty.
+    default: ""
+  private-key:
+    description: Private key of the automation App.
+    default: ""
+  owner:
+    description: Owner of the private modules; the calling repository's owner when empty.
+    default: ""
+  repositories:
+    description: Private module repositories to read, one per line; every repository the App reaches when empty.
+    default: ""
+
+outputs:
+  token:
+    description: The module-reading token, for steps that need it too (a Docker build secret, say).
+    value: ${{ steps.token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare local runner tools
+      if: inputs.apt == 'true' && runner.environment == 'self-hosted' && runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          build-essential ca-certificates curl gettext-base gh git jq libgmp-dev \
+          pkg-config python3 python3-pip python3-venv ripgrep ruby unzip wget xz-utils zip
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        go-version-file: ${{ inputs.go-version == '' && inputs.go-version-file || '' }}
+        cache: ${{ inputs.cache }}
+
+    - name: Mint a token that reads the private modules
+      id: token
+      if: inputs.client-id != ''
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.owner || github.repository_owner }}
+        repositories: ${{ inputs.repositories }}
+        permission-contents: read
+
+    - name: Reach the private modules
+      if: inputs.client-id != ''
+      shell: bash
+      env:
+        MODULE_TOKEN: ${{ steps.token.outputs.token }}
+        OWNER: ${{ inputs.owner || github.repository_owner }}
+      run: |
+        set -euo pipefail
+        go env -w "GOPRIVATE=github.com/${OWNER}/*" "GONOSUMDB=github.com/${OWNER}/*"
+        git config --global \
+          "url.https://x-access-token:${MODULE_TOKEN}@github.com/${OWNER}/.insteadOf" \
+          "https://github.com/${OWNER}/"

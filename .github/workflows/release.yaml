@@ -1,0 +1,48 @@
+name: Release
+
+# This repository's own releases, through its own release-please action.
+# Callers follow the major tag (@v1), so each release moves that tag to the
+# new version: a change reaches every caller without a pull request of its own,
+# and a breaking one ships as the next major.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: release
+        uses: ./release-please
+        with:
+          client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
+          private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
+
+      - name: Move the major tag to the release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.release.outputs.sha }}
+          MAJOR: v${{ steps.release.outputs.major }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${MAJOR}" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR}" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${MAJOR}" -f sha="$SHA" >/dev/null
+          fi
+          echo "${MAJOR} now points to ${SHA}." >> "$GITHUB_STEP_SUMMARY"

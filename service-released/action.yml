@@ -1,0 +1,71 @@
+name: Service released
+description: >-
+  Tells another repository, usually a service's plugin repository, that a
+  release exists: a repository dispatch carrying the source repository, tag,
+  commit and contract path, which that repository's own workflow acts on.
+
+inputs:
+  client-id:
+    description: Client ID of the automation App.
+    required: true
+  private-key:
+    description: Private key of the automation App.
+    required: true
+  owner:
+    description: Owner of the repository to tell; the calling repository's owner when empty.
+    default: ""
+  repository:
+    description: Name of the repository to tell, e.g. rate-router-cli.
+    required: true
+  tag:
+    description: The release tag.
+    required: true
+  sha:
+    description: The commit the release tag points to.
+    required: true
+  contract-path:
+    description: Path of the released contract inside the source repository.
+    default: system/contract/openapi.json
+  event-type:
+    description: Repository dispatch event type.
+    default: service_released
+
+runs:
+  using: composite
+  steps:
+    # Dispatching needs contents:write on that one repository and nothing here.
+    - name: Mint a token for the repository to tell
+      id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.owner || github.repository_owner }}
+        repositories: ${{ inputs.repository }}
+        permission-contents: write
+
+    - name: Dispatch the release
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        TARGET_OWNER: ${{ inputs.owner || github.repository_owner }}
+        TARGET_REPOSITORY: ${{ inputs.repository }}
+        EVENT_TYPE: ${{ inputs.event-type }}
+        SOURCE_TAG: ${{ inputs.tag }}
+        SOURCE_SHA: ${{ inputs.sha }}
+        CONTRACT_PATH: ${{ inputs.contract-path }}
+      with:
+        github-token: ${{ steps.token.outputs.token }}
+        script: |
+          const env = process.env;
+          await github.rest.repos.createDispatchEvent({
+            owner: env.TARGET_OWNER,
+            repo: env.TARGET_REPOSITORY,
+            event_type: env.EVENT_TYPE,
+            client_payload: {
+              source_repository: `${context.repo.owner}/${context.repo.repo}`,
+              source_tag: env.SOURCE_TAG,
+              source_sha: env.SOURCE_SHA,
+              contract_path: env.CONTRACT_PATH,
+            },
+          });
+          core.notice(`${env.EVENT_TYPE} ${env.SOURCE_TAG} sent to ${env.TARGET_OWNER}/${env.TARGET_REPOSITORY}.`);
