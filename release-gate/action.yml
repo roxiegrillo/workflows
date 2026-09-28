@@ -1,0 +1,122 @@
+name: Release gate
+description: >-
+  Decides whether a release tag may be built, without running any test: the
+  tag must be a stable vX.Y.Z matching the Release Please manifest at its
+  commit, that commit must be on the default branch with a published release,
+  and the checks of its first parent must have passed. A release commit adds
+  only the changelog and the manifest to its parent, so the parent's checks
+  already cover the code being released.
+
+inputs:
+  tag:
+    description: The release tag, e.g. v1.2.3.
+    required: true
+  manifest-file:
+    description: Release Please manifest.
+    default: .release-please-manifest.json
+  manifest-path:
+    description: Package path inside the manifest.
+    default: "."
+  default-branch:
+    description: Branch the release must be on; the repository's default branch when empty.
+    default: ""
+  require-green-parent:
+    description: "'false' skips the parent's checks, for rebuilding an old release whose checks never ran."
+    default: "true"
+  github-token:
+    description: Token that can read contents and checks.
+    default: ${{ github.token }}
+
+outputs:
+  sha:
+    description: Commit the tag points to.
+    value: ${{ steps.gate.outputs.sha }}
+  tag:
+    description: The release tag.
+    value: ${{ steps.gate.outputs.tag }}
+  version:
+    description: The release version, without its v.
+    value: ${{ steps.gate.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the release
+      id: gate
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        TAG: ${{ inputs.tag }}
+        MANIFEST_FILE: ${{ inputs.manifest-file }}
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch || github.event.repository.default_branch }}
+        REQUIRE_GREEN_PARENT: ${{ inputs.require-green-parent }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const env = process.env;
+          const { owner, repo } = context.repo;
+          const tag = env.TAG;
+          const refuse = (message) => { throw new Error(message); };
+
+          if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) {
+            refuse(`${tag} is not a stable vX.Y.Z release tag.`);
+          }
+
+          const ref = await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+          let sha = ref.data.object.sha;
+          if (ref.data.object.type === 'tag') {
+            sha = (await github.rest.git.getTag({ owner, repo, tag_sha: sha })).data.object.sha;
+          }
+
+          const file = await github.rest.repos.getContent({ owner, repo, path: env.MANIFEST_FILE, ref: sha });
+          const manifest = JSON.parse(Buffer.from(file.data.content, 'base64').toString('utf8'));
+          if (`v${manifest[env.MANIFEST_PATH]}` !== tag) {
+            refuse(`${tag} is not the version ${env.MANIFEST_FILE} records at ${sha} (${manifest[env.MANIFEST_PATH]}).`);
+          }
+
+          const compare = await github.rest.repos.compareCommitsWithBasehead({
+            owner, repo, basehead: `${sha}...${env.DEFAULT_BRANCH}`,
+          });
+          if (!['identical', 'ahead'].includes(compare.data.status)) {
+            refuse(`${sha} is not on ${env.DEFAULT_BRANCH}.`);
+          }
+
+          // Release Please publishes the release right after the tag; allow it a minute.
+          let release;
+          for (let attempt = 0; attempt < 12 && !release; attempt++) {
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+            }
+          }
+          if (!release || release.draft || release.prerelease) {
+            refuse(`${tag} has no published, stable GitHub release.`);
+          }
+
+          if (env.REQUIRE_GREEN_PARENT === 'true') {
+            const commit = (await github.rest.repos.getCommit({ owner, repo, ref: sha })).data;
+            const parent = commit.parents[0].sha;
+            const runs = await github.paginate(github.rest.checks.listForRef, {
+              owner, repo, ref: parent, per_page: 100,
+            });
+            if (runs.length === 0) {
+              refuse(`No checks ran on ${parent}, the code this release carries, so nothing vouches for it.`);
+            }
+            const running = runs.filter((run) => run.status !== 'completed');
+            if (running.length > 0) {
+              refuse(`Checks are still running on ${parent} (${running.map((run) => run.name).join(', ')}); run this workflow again for ${tag} once they finish.`);
+            }
+            const passed = ['success', 'skipped', 'neutral'];
+            const failed = runs.filter((run) => !passed.includes(run.conclusion));
+            if (failed.length > 0) {
+              refuse(`Checks did not pass on ${parent}: ${failed.map((run) => `${run.name} (${run.conclusion})`).join(', ')}.`);
+            }
+            core.info(`${runs.length} checks passed on ${parent}.`);
+          }
+
+          core.setOutput('sha', sha);
+          core.setOutput('tag', tag);
+          core.setOutput('version', tag.slice(1));
+          core.notice(`${tag} (${sha}) may be built.`);

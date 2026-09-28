@@ -1,0 +1,70 @@
+name: Release Please
+description: >-
+  Proposes or publishes a release with Release Please, from the repository's
+  manifest and config, using a token minted from the organisation's automation
+  App. GITHUB_TOKEN will not do: a tag it creates starts no other workflow, so
+  no image or archive would ever be built from it.
+
+inputs:
+  client-id:
+    description: Client ID of the automation App (kopo-ci in roxiegrillo).
+    required: true
+  private-key:
+    description: Private key of the automation App.
+    required: true
+  config-file:
+    description: Release Please config.
+    default: release-please-config.json
+  manifest-file:
+    description: Release Please manifest.
+    default: .release-please-manifest.json
+  target-branch:
+    description: Branch to release from; the repository's default branch when empty.
+    default: ""
+
+outputs:
+  release_created:
+    description: "'true' when this run published the root package's release."
+    value: ${{ steps.release.outputs.release_created }}
+  releases_created:
+    description: "'true' when this run published any release."
+    value: ${{ steps.release.outputs.releases_created }}
+  tag_name:
+    description: Tag of the root package's release.
+    value: ${{ steps.release.outputs.tag_name }}
+  sha:
+    description: Commit the release tag points to.
+    value: ${{ steps.release.outputs.sha }}
+  version:
+    description: Version of the root package's release, without its v.
+    value: ${{ steps.release.outputs.version }}
+  major:
+    description: Major version of the root package's release.
+    value: ${{ steps.release.outputs.major }}
+  prs:
+    description: JSON array of the release pull requests this run created or updated.
+    value: ${{ steps.release.outputs.prs }}
+
+runs:
+  using: composite
+  steps:
+    # Scoped to the calling repository alone, with the three permissions
+    # Release Please needs and no more.
+    - name: Mint the release token
+      id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        permission-contents: write
+        permission-issues: write
+        permission-pull-requests: write
+
+    - name: Run Release Please
+      id: release
+      uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+      with:
+        config-file: ${{ inputs.config-file }}
+        manifest-file: ${{ inputs.manifest-file }}
+        target-branch: ${{ inputs.target-branch }}
+        token: ${{ steps.token.outputs.token }}

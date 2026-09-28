@@ -1,0 +1,81 @@
+name: Release Please
+
+# Called on every push to a roxiegrillo repository's default branch: proposes
+# or publishes the release and, when a service publishes one, tells its plugin
+# repository. A reusable workflow reaches the caller's self-hosted runners only
+# within its own organisation, so other organisations use the release-please
+# and service-released actions from their own jobs instead.
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner label for the jobs.
+        type: string
+        default: lab-ci
+      plugin-repository:
+        description: The service's plugin repository in the same owner, e.g. rate-router-cli; none when empty.
+        type: string
+        default: ""
+      contract-path:
+        description: Path of the contract the plugin repository regenerates from.
+        type: string
+        default: system/contract/openapi.json
+      config-file:
+        description: Release Please config.
+        type: string
+        default: release-please-config.json
+      manifest-file:
+        description: Release Please manifest.
+        type: string
+        default: .release-please-manifest.json
+      target-branch:
+        description: Branch to release from; the repository's default branch when empty.
+        type: string
+        default: ""
+    outputs:
+      release_created:
+        description: "'true' when this run published a release."
+        value: ${{ jobs.release-please.outputs.release_created }}
+      tag_name:
+        description: The published release's tag.
+        value: ${{ jobs.release-please.outputs.tag_name }}
+      sha:
+        description: The commit the published release's tag points to.
+        value: ${{ jobs.release-please.outputs.sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - id: release
+        uses: roxiegrillo/workflows/release-please@v1
+        with:
+          client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
+          private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
+          config-file: ${{ inputs.config-file }}
+          manifest-file: ${{ inputs.manifest-file }}
+          target-branch: ${{ inputs.target-branch }}
+
+  plugin:
+    name: Tell the plugin repository
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true' && inputs.plugin-repository != ''
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: roxiegrillo/workflows/service-released@v1
+        with:
+          client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
+          private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
+          repository: ${{ inputs.plugin-repository }}
+          tag: ${{ needs.release-please.outputs.tag_name }}
+          sha: ${{ needs.release-please.outputs.sha }}
+          contract-path: ${{ inputs.contract-path }}

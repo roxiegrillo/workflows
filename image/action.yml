@@ -1,0 +1,201 @@
+name: Release image
+description: >-
+  Builds, pushes and signs the image of a release tag, once. It runs no tests:
+  run the release gate first. An image already published under the tag is
+  accepted only when it was built from the same commit, so a rerun never
+  replaces a released image.
+
+inputs:
+  image:
+    description: Image repository, e.g. ghcr.io/roxiegrillo/rate-router.
+    required: true
+  tag:
+    description: The release tag to build, e.g. v1.2.3.
+    required: true
+  image-tag:
+    description: Tag of the image; the release version without its v when empty.
+    default: ""
+  platforms:
+    description: Target platforms. Anything but the builder's own runs under QEMU unless the Dockerfile cross-compiles.
+    default: linux/amd64
+  context:
+    description: Build context.
+    default: "."
+  file:
+    description: Dockerfile.
+    default: Dockerfile
+  build-args:
+    description: Build arguments, one KEY=value per line.
+    default: ""
+  client-id:
+    description: Client ID of the automation App, for reading private modules.
+    default: ""
+  private-key:
+    description: Private key of the automation App, for reading private modules.
+    default: ""
+  module-owner:
+    description: Owner of the private modules; the calling repository's owner when empty.
+    default: ""
+  module-repositories:
+    description: Private module repositories the build reads, one per line; none when empty.
+    default: ""
+  module-token-secret:
+    description: BuildKit secret id that receives the module token itself, e.g. github_token.
+    default: ""
+  module-netrc-secret:
+    description: BuildKit secret id that receives a netrc file holding the module token, e.g. netrc.
+    default: ""
+  registry:
+    description: Registry to log in to.
+    default: ghcr.io
+  registry-username:
+    description: Registry user.
+    default: ${{ github.actor }}
+  registry-password:
+    description: Registry password; the job's token needs packages:write for ghcr.io.
+    default: ${{ github.token }}
+  sign:
+    description: "'false' skips the keyless cosign signature (which needs id-token:write)."
+    default: "true"
+
+outputs:
+  digest:
+    description: Digest of the released image.
+    value: ${{ steps.result.outputs.digest }}
+  image-ref:
+    description: The released image by digest.
+    value: ${{ steps.result.outputs.image-ref }}
+  built:
+    description: "'true' when this run built the image, 'false' when it was already published."
+    value: ${{ steps.result.outputs.built }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the release
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ inputs.tag }}
+        persist-credentials: false
+
+    - name: Name the image and the commit
+      id: version
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+      run: |
+        set -euo pipefail
+        echo "tag=${IMAGE_TAG:-${TAG#v}}" >> "$GITHUB_OUTPUT"
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Mint a token that reads the private modules
+      id: token
+      if: inputs.module-repositories != ''
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.module-owner || github.repository_owner }}
+        repositories: ${{ inputs.module-repositories }}
+        permission-contents: read
+
+    # A BuildKit secret is mounted for one RUN and never becomes a layer or a
+    # build argument.
+    - name: Write the module credentials for the build
+      if: inputs.module-netrc-secret != ''
+      shell: bash
+      env:
+        MODULE_TOKEN: ${{ steps.token.outputs.token }}
+      run: |
+        set -euo pipefail
+        umask 077
+        printf 'machine github.com login x-access-token password %s\n' "$MODULE_TOKEN" > "$RUNNER_TEMP/netrc"
+
+    - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+    - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.registry-username }}
+        password: ${{ inputs.registry-password }}
+
+    - name: Look for an image already published under the tag
+      id: existing
+      shell: bash
+      env:
+        REF: ${{ inputs.image }}:${{ steps.version.outputs.tag }}
+        SHA: ${{ steps.version.outputs.sha }}
+      run: |
+        set -euo pipefail
+        if docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' > "$RUNNER_TEMP/manifest.json" 2> "$RUNNER_TEMP/inspect.err"; then
+          revision="$(docker buildx imagetools inspect "$REF" --format '{{json .Image}}' |
+            jq -r '(if has("config") then . else (to_entries | first | .value) end) | .config.Labels["org.opencontainers.image.revision"] // empty')"
+          if [[ "$revision" != "$SHA" ]]; then
+            echo "::error::$REF is already published from ${revision:-an unknown commit}, not $SHA; a released image is never replaced."
+            exit 1
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -er '.digest' "$RUNNER_TEMP/manifest.json")" >> "$GITHUB_OUTPUT"
+        elif grep -Eiq 'manifest unknown|not found|404' "$RUNNER_TEMP/inspect.err"; then
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        else
+          cat "$RUNNER_TEMP/inspect.err" >&2
+          exit 1
+        fi
+
+    - name: Describe the image
+      id: meta
+      if: steps.existing.outputs.exists != 'true'
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+      with:
+        images: ${{ inputs.image }}
+        tags: type=raw,value=${{ steps.version.outputs.tag }}
+        # A rebuild dispatched from the default branch still describes the tag.
+        labels: |
+          org.opencontainers.image.revision=${{ steps.version.outputs.sha }}
+          org.opencontainers.image.version=${{ inputs.tag }}
+
+    - name: Build and push
+      id: build
+      if: steps.existing.outputs.exists != 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        platforms: ${{ inputs.platforms }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        secrets: ${{ inputs.module-token-secret != '' && format('{0}={1}', inputs.module-token-secret, steps.token.outputs.token) || '' }}
+        secret-files: ${{ inputs.module-netrc-secret != '' && format('{0}={1}/netrc', inputs.module-netrc-secret, runner.temp) || '' }}
+        provenance: mode=max
+        sbom: true
+
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      if: inputs.sign == 'true' && steps.existing.outputs.exists != 'true'
+
+    - name: Sign the image
+      if: inputs.sign == 'true' && steps.existing.outputs.exists != 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+    - name: Report the image
+      id: result
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+        EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+      run: |
+        set -euo pipefail
+        digest="${BUILT_DIGEST:-$EXISTING_DIGEST}"
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "image-ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+        echo "built=$([[ -n "$BUILT_DIGEST" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        echo "${IMAGE}@${digest}" >> "$GITHUB_STEP_SUMMARY"
