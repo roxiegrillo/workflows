@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/roxiegrillo/workflows/compare/v1.0.0...v1.1.0) (2026-09-28)
+
+
+### Features
+
+* **image:** fill the release commit and tag into build arguments ([#3](https://github.com/roxiegrillo/workflows/issues/3)) ([88b3a39](https://github.com/roxiegrillo/workflows/commit/88b3a392a217f9f5a15e1f7d7a3ddba44e72ab50))
+
 ## 1.0.0 (2026-09-28)
 
 
