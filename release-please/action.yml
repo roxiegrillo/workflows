@@ -44,6 +44,9 @@ outputs:
   prs:
     description: JSON array of the release pull requests this run created or updated.
     value: ${{ steps.release.outputs.prs }}
+  token:
+    description: The release token (masked), for a step that acts on the release pull request, such as merging it.
+    value: ${{ steps.token.outputs.token }}
 
 runs:
   using: composite
