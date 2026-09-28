@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/roxiegrillo/workflows/compare/v1.1.0...v1.2.0) (2026-09-28)
+
+
+### Features
+
+* **release-please:** expose the release token ([#6](https://github.com/roxiegrillo/workflows/issues/6)) ([e20fcbe](https://github.com/roxiegrillo/workflows/commit/e20fcbeaca2ef1b0569ba42303e31cfc59dd5a93))
+
 ## [1.1.0](https://github.com/roxiegrillo/workflows/compare/v1.0.0...v1.1.0) (2026-09-28)
 
 
