@@ -29,7 +29,7 @@ these instead of carrying their own copies.
 | `image` action | Builds, pushes and signs a tag's image once; a rerun never replaces a published image | any repository |
 | `go-setup` action | The standard runner tools, Go, and read access to the owner's private modules | any repository |
 | `release-please.yaml` workflow | Release Please, then `service-released` when a service publishes | roxiegrillo |
-| `release-image.yaml` workflow | `release-gate` on the CI runner, then `image` on the build runner | roxiegrillo |
+| `release-image.yaml` workflow | `release-gate` on the CI runner, then `image` on the build runner; signs as this repository (see below) | roxiegrillo |
 
 A reusable workflow reaches the caller's self-hosted runners only when both
 belong to the same organisation, so the workflows serve roxiegrillo and other
@@ -77,7 +77,15 @@ jobs:
       plugin-repository: rate-router-cli # services only
 ```
 
-### Release image (roxiegrillo)
+### Release image
+
+Call the `release-gate` and `image` actions from the repository's own release
+workflow rather than `release-image.yaml`. A keyless signature names the
+workflow that ran the signing job; in a reusable workflow that is
+`roxiegrillo/workflows/.github/workflows/release-image.yaml@refs/tags/v1`, not
+the repository's own release workflow at its tag. `lab-k8s-infra` verifies
+goal-context's images by that identity, so a repository keeps it by running
+the actions in its own jobs:
 
 ```yaml
 name: Release image
@@ -92,35 +100,50 @@ on:
 permissions:
   contents: read
 jobs:
-  image:
-    uses: roxiegrillo/workflows/.github/workflows/release-image.yaml@v1
-    secrets: inherit
+  gate:
+    runs-on: ${{ vars.LAB_CI_RUNNER || 'lab-ci' }}
     permissions:
       contents: read
       checks: read
+    outputs:
+      tag: ${{ steps.gate.outputs.tag }}
+    steps:
+      - id: gate
+        uses: roxiegrillo/workflows/release-gate@v1
+        with:
+          tag: ${{ inputs.tag || github.ref_name }}
+  image:
+    needs: gate
+    runs-on: ${{ vars.LAB_BUILD_RUNNER || 'lab-build' }}
+    permissions:
+      contents: read
       packages: write
       id-token: write
-    with:
-      image: ghcr.io/roxiegrillo/rate-router
-      tag: ${{ inputs.tag || github.ref_name }}
-      build-args: GITHUB_USERNAME=x-access-token
-      module-repositories: |
-        koba
-        koba-http
-      module-token-secret: github_token
-      # Optional: build arguments that receive the release commit and tag,
-      # right even when a rebuild is dispatched from the default branch.
-      # revision-arg: SOURCE_REVISION
-      # version-arg: IMAGE_VERSION
+    steps:
+      - uses: roxiegrillo/workflows/image@v1
+        with:
+          image: ghcr.io/roxiegrillo/rate-router
+          tag: ${{ needs.gate.outputs.tag }}
+          build-args: GITHUB_USERNAME=x-access-token
+          client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
+          private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
+          module-repositories: |
+            koba
+            koba-http
+          module-token-secret: github_token
 ```
 
 `module-repositories` narrows the module token; left empty, it reads every
 repository the App reaches. A Dockerfile that reads a netrc file takes
-`module-netrc-secret: netrc` instead of `module-token-secret`.
+`module-netrc-secret: netrc` instead of `module-token-secret`, and
+`revision-arg`/`version-arg` name build arguments that receive the release
+commit and tag. `release-image.yaml` wires the same two actions and suits a
+repository whose signatures nobody verifies by identity.
 
 The gate refuses a tag while its parent's checks are still running, so merge
 a release pull request once the default branch is green, or run the workflow
-again for the tag when they finish.
+again for the tag when they finish. A rebuild dispatched from the default
+branch is signed with that branch's ref, not the tag's.
 
 ### From another organisation
 
