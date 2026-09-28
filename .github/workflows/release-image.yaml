@@ -4,6 +4,10 @@ name: Release image
 # is rebuilt by hand): the gate decides on the CI runner in seconds, then the
 # image is built once on the build runner, with no second test run. The caller
 # grants contents:read, checks:read, packages:write and id-token:write.
+#
+# The keyless signature names this workflow, not the caller's: a repository
+# whose images are verified by the caller's workflow identity runs the
+# release-gate and image actions in its own jobs instead.
 on:
   workflow_call:
     inputs:
