@@ -35,8 +35,16 @@ on:
         description: Build arguments, one KEY=value per line.
         type: string
         default: ""
+      revision-arg:
+        description: Build argument that receives the release commit, e.g. SOURCE_REVISION.
+        type: string
+        default: ""
+      version-arg:
+        description: Build argument that receives the release tag, e.g. VERSION.
+        type: string
+        default: ""
       module-repositories:
-        description: Private module repositories the build reads, one per line.
+        description: Private module repositories the token reads, one per line; every repository the App reaches when empty.
         type: string
         default: ""
       module-token-secret:
@@ -108,6 +116,8 @@ jobs:
           context: ${{ inputs.context }}
           file: ${{ inputs.file }}
           build-args: ${{ inputs.build-args }}
+          revision-arg: ${{ inputs.revision-arg }}
+          version-arg: ${{ inputs.version-arg }}
           client-id: ${{ vars.KOPO_CI_CLIENT_ID }}
           private-key: ${{ secrets.KOPO_CI_PRIVATE_KEY }}
           module-repositories: ${{ inputs.module-repositories }}

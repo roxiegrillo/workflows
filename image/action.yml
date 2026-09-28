@@ -27,6 +27,12 @@ inputs:
   build-args:
     description: Build arguments, one KEY=value per line.
     default: ""
+  revision-arg:
+    description: Build argument that receives the release commit, e.g. SOURCE_REVISION; none when empty.
+    default: ""
+  version-arg:
+    description: Build argument that receives the release tag, e.g. VERSION; none when empty.
+    default: ""
   client-id:
     description: Client ID of the automation App, for reading private modules.
     default: ""
@@ -37,10 +43,10 @@ inputs:
     description: Owner of the private modules; the calling repository's owner when empty.
     default: ""
   module-repositories:
-    description: Private module repositories the build reads, one per line; none when empty.
+    description: Private module repositories the token reads, one per line; every repository the App reaches when empty.
     default: ""
   module-token-secret:
-    description: BuildKit secret id that receives the module token itself, e.g. github_token.
+    description: BuildKit secret id that receives the module token itself, e.g. github_token; no token when both secret ids are empty.
     default: ""
   module-netrc-secret:
     description: BuildKit secret id that receives a netrc file holding the module token, e.g. netrc.
@@ -91,7 +97,7 @@ runs:
 
     - name: Mint a token that reads the private modules
       id: token
-      if: inputs.module-repositories != ''
+      if: inputs.module-token-secret != '' || inputs.module-netrc-secret != ''
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
         client-id: ${{ inputs.client-id }}
@@ -137,7 +143,9 @@ runs:
           fi
           echo "exists=true" >> "$GITHUB_OUTPUT"
           echo "digest=$(jq -er '.digest' "$RUNNER_TEMP/manifest.json")" >> "$GITHUB_OUTPUT"
-        elif grep -Eiq 'manifest unknown|not found|404' "$RUNNER_TEMP/inspect.err"; then
+        # ghcr.io answers denied for a package that does not exist yet; a real
+        # permission problem fails at the push below instead.
+        elif grep -Eiq 'manifest unknown|not found|404|denied|unauthorized' "$RUNNER_TEMP/inspect.err"; then
           echo "exists=false" >> "$GITHUB_OUTPUT"
         else
           cat "$RUNNER_TEMP/inspect.err" >&2
@@ -156,6 +164,28 @@ runs:
           org.opencontainers.image.revision=${{ steps.version.outputs.sha }}
           org.opencontainers.image.version=${{ inputs.tag }}
 
+    # A rebuild dispatched from the default branch still names the tag's commit
+    # and version, which github.sha and github.ref_name would not.
+    - name: Complete the build arguments
+      id: args
+      if: steps.existing.outputs.exists != 'true'
+      shell: bash
+      env:
+        ARGS: ${{ inputs.build-args }}
+        REVISION_ARG: ${{ inputs.revision-arg }}
+        VERSION_ARG: ${{ inputs.version-arg }}
+        SHA: ${{ steps.version.outputs.sha }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        {
+          echo 'value<<BUILD_ARGS'
+          if [[ -n "$ARGS" ]]; then printf '%s\n' "$ARGS" | sed '/^[[:space:]]*$/d'; fi
+          if [[ -n "$REVISION_ARG" ]]; then echo "${REVISION_ARG}=${SHA}"; fi
+          if [[ -n "$VERSION_ARG" ]]; then echo "${VERSION_ARG}=${TAG}"; fi
+          echo 'BUILD_ARGS'
+        } >> "$GITHUB_OUTPUT"
+
     - name: Build and push
       id: build
       if: steps.existing.outputs.exists != 'true'
@@ -167,7 +197,7 @@ runs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        build-args: ${{ inputs.build-args }}
+        build-args: ${{ steps.args.outputs.value }}
         secrets: ${{ inputs.module-token-secret != '' && format('{0}={1}', inputs.module-token-secret, steps.token.outputs.token) || '' }}
         secret-files: ${{ inputs.module-netrc-secret != '' && format('{0}={1}/netrc', inputs.module-netrc-secret, runner.temp) || '' }}
         provenance: mode=max

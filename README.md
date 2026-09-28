@@ -108,7 +108,15 @@ jobs:
         koba
         koba-http
       module-token-secret: github_token
+      # Optional: build arguments that receive the release commit and tag,
+      # right even when a rebuild is dispatched from the default branch.
+      # revision-arg: SOURCE_REVISION
+      # version-arg: IMAGE_VERSION
 ```
+
+`module-repositories` narrows the module token; left empty, it reads every
+repository the App reaches. A Dockerfile that reads a netrc file takes
+`module-netrc-secret: netrc` instead of `module-token-secret`.
 
 The gate refuses a tag while its parent's checks are still running, so merge
 a release pull request once the default branch is green, or run the workflow
