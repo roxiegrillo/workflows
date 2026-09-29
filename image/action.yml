@@ -78,6 +78,19 @@ outputs:
 runs:
   using: composite
   steps:
+    # A lab runner starts bare. This step installs only what the steps below
+    # need on it: curl and jq for the registry checks, gettext-base for the
+    # envsubst the cosign installer runs. GitHub's runners skip it.
+    - name: Prepare local runner tools
+      if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          ca-certificates curl gettext-base jq
+
     - name: Check out the release
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -204,15 +217,26 @@ runs:
         sbom: true
 
     - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      if: inputs.sign == 'true' && steps.existing.outputs.exists != 'true'
+      if: inputs.sign == 'true'
 
+    # A run that pushed the image and then failed before signing leaves a
+    # published, unsigned image; the rerun finds it under the tag from the same
+    # commit and signs it here. An image that already carries a signature is
+    # left alone, so a rerun never adds a second one.
     - name: Sign the image
-      if: inputs.sign == 'true' && steps.existing.outputs.exists != 'true'
+      if: inputs.sign == 'true'
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
-        DIGEST: ${{ steps.build.outputs.digest }}
-      run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+      run: |
+        set -euo pipefail
+        ref="${IMAGE}@${DIGEST}"
+        if cosign verify --certificate-identity-regexp '.' --certificate-oidc-issuer-regexp '.' "$ref" >/dev/null 2>&1; then
+          echo "$ref is already signed"
+        else
+          cosign sign --yes "$ref"
+        fi
 
     - name: Report the image
       id: result
