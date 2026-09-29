@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/roxiegrillo/workflows/compare/v1.2.0...v1.2.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **image:** prepare the lab runner and sign an image published before signing failed ([4de32a3](https://github.com/roxiegrillo/workflows/commit/4de32a3f1cc8348bb23a6bc8de9e63bb6e9264bb))
+
 ## [1.2.0](https://github.com/roxiegrillo/workflows/compare/v1.1.0...v1.2.0) (2026-09-28)
 
 
