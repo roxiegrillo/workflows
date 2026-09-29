@@ -26,7 +26,7 @@ these instead of carrying their own copies.
 | `release-please` action | Mints a release token from the automation App and runs Release Please | any repository |
 | `service-released` action | Sends `service_released` to a service's plugin repository | any repository |
 | `release-gate` action | Checks a release tag against the manifest, the default branch, its GitHub release and its parent's checks | any repository |
-| `image` action | Builds, pushes and signs a tag's image once; a rerun never replaces a published image | any repository |
+| `image` action | Builds, pushes and signs a tag's image once; a rerun never replaces a published image, and signs one that an earlier run pushed but failed to sign | any repository |
 | `go-setup` action | The standard runner tools, Go, and read access to the owner's private modules | any repository |
 | `release-please.yaml` workflow | Release Please, then `service-released` when a service publishes | roxiegrillo |
 | `release-image.yaml` workflow | `release-gate` on the CI runner, then `image` on the build runner; signs as this repository (see below) | roxiegrillo |
